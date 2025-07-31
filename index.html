@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Options Greeks Quiz</title>
+  <style>
+    /* ---------- layout ---------- */
+    body {
+      font-family: "Segoe UI", sans-serif;
+      background: #f4f4f9;
+      color: #333;
+      max-width: 700px;
+      margin: 40px auto;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    h1 { text-align: center; }
+    .input-group { margin-bottom: 20px; }
+    .input-group input {
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 16px;
+      width: 100%;
+    }
+    .question, .greeks, .choices, .feedback { margin: 20px 0; }
+    .greeks div { margin: 4px 0; }
+
+    /* ---------- buttons ---------- */
+    button {
+      padding: 10px 15px;
+      margin: 5px 5px 5px 0;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn-yes { background: #4caf50; color: #fff; }
+    .btn-no  { background: #f44336; color: #fff; }
+    .btn-next    { background: #2196f3; color: #fff; display: none; }
+    .btn-restart { background: #666;    color: #fff; display: none; }
+
+    /* ---------- feedback ---------- */
+    .feedback { margin-top: 20px; font-weight: bold; white-space: pre-line; }
+    .quote-note { font-size: 0.9em; color: #777; }
+    ul.analysis { margin: 0; padding-left: 20px; }
+
+    /* ---------- tooltip (label ONLY) ---------- */
+    .greek-label {
+      position: relative;
+      cursor: pointer;           /* arrow-pointer, NOT question-mark */
+    }
+    .greek-label::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: 125%;              /* above the word */
+      left: 50%;
+      transform: translateX(-50%);
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s;
+      z-index: 10;
+      min-width: 180px;
+      max-width: 240px;
+      padding: 6px 8px;
+      font-size: 0.75em;
+      line-height: 1.2em;
+      color: #fff;
+      background: #333;
+      border-radius: 4px;
+      text-align: center;
+      pointer-events: none;      /* keeps hover on the label only */
+      white-space: normal;
+    }
+    .greek-label::before {       /* small arrow */
+      content: "";
+      position: absolute;
+      bottom: 115%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: #333;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s;
+    }
+    .greek-label:hover::after,
+    .greek-label:hover::before {
+      opacity: 1;
+      visibility: visible;
+    }
+  </style>
+</head>
+<body>
+  <h1>Options Greeks Quiz</h1>
+
+  <div class="input-group">
+    <label for="stockQuote">Optional: Enter stock quote (e.g., 105.32)</label>
+    <input type="number" id="stockQuote" placeholder="Enter stock price..." step="0.01" min="0" />
+    <small class="quote-note">Used to estimate the underlying move for this strategy.</small>
+  </div>
+
+  <div id="question" class="question"></div>
+  <div id="greeks"   class="greeks"></div>
+  <div id="choices"  class="choices"></div>
+  <div id="feedback" class="feedback"></div>
+  <button id="nextBtn"    class="btn-next"    onclick="newRound()">Next Question</button>
+  <button id="restartBtn" class="btn-restart" onclick="restartQuiz()">Restart Quiz</button>
+
+  <script>
+    /* ---------- strategies ---------- */
+    const strategies = [
+      { name: "Buy Call", logic: g => g.delta > 0.60 && g.theta > -0.07 && g.vega > 0.10, movePct:  0.10 },
+      { name: "Buy Put",  logic: g => g.delta < -0.60 && g.theta > -0.07 && g.vega > 0.10, movePct: -0.10 }
+    ];
+
+    /* ---------- tooltip text ---------- */
+    const greekDefs = {
+      delta: "Δ (Delta): The amount an option’s price is expected to move for a $1 change in the underlying asset.",
+      gamma: "Γ (Gamma): The rate at which Delta itself changes when the underlying price moves.",
+      theta: "Θ (Theta): The option’s sensitivity to the passage of time (“time decay”), holding all else constant.",
+      vega:  "Vega: How much an option’s price changes for a one-percentage-point move in implied volatility.",
+      rho:   "Rho: The option’s sensitivity to a one-percentage-point change in the risk-free interest rate."
+    };
+
+    /* ---------- state ---------- */
+    let round = 0, currentCorrect = false, currentStrat = null, currentGreeks = null;
+    const feedbackEl = document.getElementById("feedback");
+    const nextBtn    = document.getElementById("nextBtn");
+    const restartBtn = document.getElementById("restartBtn");
+
+    /* ---------- helpers ---------- */
+    function genGreeks() {
+      return {
+        delta: +(Math.random()*2 - 1).toFixed(2),
+        gamma: +(Math.random()*0.20).toFixed(2),
+        theta: +(Math.random()*-0.12).toFixed(2),
+        vega:  +(Math.random()*0.60).toFixed(2),
+        rho:   +(Math.random()*0.30).toFixed(2)
+      };
+    }
+
+    function displayGreeks(g) {
+      document.getElementById("greeks").innerHTML =
+        Object.entries(g).map(([k,v]) => `
+          <div>
+            <strong>
+              <span class="greek-label" data-tip="${greekDefs[k]}">${k.toUpperCase()}</span>:
+            </strong> ${v}
+          </div>`).join("");
+    }
+
+    function getRationale(name,g){
+      const bullets=[];
+      const push=(ok,txt)=>bullets.push(`<li>${txt} — <strong>${ok?"✓":"✗"}</strong></li>`);
+      if(name==="Buy Call"){
+        push(g.delta>0.60,`Delta ${g.delta}. Upside sensitivity above 0.60.`);
+        push(g.theta>-0.07,`Theta ${g.theta}. Time decay acceptable above -0.07.`);
+        push(g.vega >0.10,`Vega  ${g.vega}. Vol-benefit above 0.10.`);
+      }else{
+        push(g.delta<-0.60,`Delta ${g.delta}. Downside sensitivity below -0.60.`);
+        push(g.theta>-0.07,`Theta ${g.theta}. Time decay acceptable above -0.07.`);
+        push(g.vega >0.10,`Vega  ${g.vega}. Vol-benefit above 0.10.`);
+      }
+      return `<ul class="analysis">${bullets.join("")}</ul>`;
+    }
+
+    /* ---------- quiz flow ---------- */
+    function newRound(){
+      feedbackEl.textContent="";
+      nextBtn.style.display="none";
+      restartBtn.style.display="none";
+
+      currentStrat=strategies[Math.floor(Math.random()*strategies.length)];
+      currentGreeks=genGreeks();
+      currentCorrect=currentStrat.logic(currentGreeks);
+      round++;
+
+      document.getElementById("question").innerHTML=
+        `<strong>Strategy:</strong> ${currentStrat.name}<br>Would you take this position?`;
+      displayGreeks(currentGreeks);
+      document.getElementById("choices").innerHTML=`
+        <button class="btn-yes" onclick="submitAnswer(true)">Yes</button>
+        <button class="btn-no"  onclick="submitAnswer(false)">No</button>`;
+    }
+
+    function submitAnswer(userAns){
+      document.querySelectorAll("#choices button").forEach(b=>b.disabled=true);
+      const quote=parseFloat(document.getElementById("stockQuote").value);
+      const hasQuote=!isNaN(quote)&&quote>0;
+
+      const smart=userAns===currentCorrect;
+      const color=smart?"#4caf50":"#f44336";
+      let html=`<p style="color:${color};">${smart?"Smart choice!":"Poor decision."}</p>`;
+
+      if(hasQuote){
+        const pct=currentStrat.movePct*100;
+        const tgt=(quote*(1+currentStrat.movePct)).toFixed(2);
+        const diff=(tgt-quote).toFixed(2);
+        html+=`<p>If the ${currentStrat.name} thesis plays out, the stock could move to about $${tgt} (${pct>0?"+":""}${pct}%); a ${diff>=0?"+":""}$${diff} change per share.</p>`;
+      }
+      html+=`<h4>Greek Check</h4>${getRationale(currentStrat.name,currentGreeks)}`;
+      feedbackEl.innerHTML=html;
+
+      nextBtn.style.display="inline-block";
+      if(round>=10) restartBtn.style.display="inline-block";
+    }
+
+    function restartQuiz(){ round=0; newRound(); }
+
+    /* ---------- start ---------- */
+    newRound();
+  </script>
+</body>
+</html>
